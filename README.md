@@ -6,6 +6,16 @@ Testing other features:
 - Beautifying .cxml / .xml files when dropping these files
 
 ## Setup for Dev
+Requires to install Mac xcode, Brew and Python3.7
+
+xcode:
+
+`xcode-select --install`
+
+Brew:
+
+`/usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"`
+
 Install Python 3.7 with Brew with the Terminal:
 
 `brew install python3`
