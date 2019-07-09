@@ -6,15 +6,28 @@ Testing other features:
 - Beautifying .cxml / .xml files when dropping these files
 
 ## Setup for Dev
-Create virtual env
+Install Python 3.7 with Brew with the Terminal:
 
-Activate it
-`source msgtoeml_env/bin/activate`
+`brew install python3`
+
+Install a virtual environment (virtualenv):
+
+`sudo pip3 install virtualenv`
+
+Create virtual environment for this specific app using Python 3.7:
+
+`virtualenv -p python3.7 msgtoeml_env`
+
+Activate the virtual environment:
+
+`source msg_env/bin/activate`
 
 Install requirements.txt
+
 `pip3 install requirements.txt`
 
 Compile with pyinstaller
+
 `pyinstaller convert_msg_to_eml.py`
 
 
