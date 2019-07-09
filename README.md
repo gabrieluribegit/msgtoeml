@@ -28,7 +28,7 @@ Install requirements.txt
 
 Compile with pyinstaller
 
-`pyinstaller convert_msg_to_eml.py`
+`pyinstaller --noconsole Convert\ msg\ to\ eml.py`
 
 
 
