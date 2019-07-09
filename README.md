@@ -40,5 +40,5 @@ Compile with pyinstaller
 
 `pyinstaller --noconsole Convert\ msg\ to\ eml.py`
 
-
+Run the created "Convert msg to eml.app", by double click.
 
