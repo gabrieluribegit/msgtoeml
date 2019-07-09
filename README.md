@@ -20,7 +20,7 @@ Create virtual environment for this specific app using Python 3.7:
 
 Activate the virtual environment:
 
-`source msg_env/bin/activate`
+`source msgtoeml_env/bin/activate`
 
 Install requirements.txt
 
