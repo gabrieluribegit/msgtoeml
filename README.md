@@ -9,13 +9,13 @@ Testing other features:
 Create virtual env
 
 Activate it
-source msgtoeml_env/bin/activate
+`source msgtoeml_env/bin/activate`
 
 Install requirements.txt
-pip3 install requirements.txt
+`pip3 install requirements.txt`
 
 Compile with pyinstaller
-pyinstaller convert_msg_to_eml.py
+`pyinstaller convert_msg_to_eml.py`
 
 
 
