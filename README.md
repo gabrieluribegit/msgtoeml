@@ -7,38 +7,24 @@ Testing other features:
 - Convert Base64 and urlencode
 
 ## Setup for Dev
-
-Install Python 3.7.3 with Homebrew:
-brew install https://raw.githubusercontent.com/Homebrew/homebrew-core/c24d6bcd4795e9263617e49f340cc61498eea5d3/Formula/python.rb
-
-Install virtualenv
-pip install virtualenv
-
-Create virtual env
-virtualenv -p python3 msgtoeml_env
-=======
 Requires to install Mac xcode, Brew and Python3.7
 
-
 xcode:
-
 `xcode-select --install`
 
 Brew:
-
 `/usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"`
 
-Install Python 3.7 with Brew with the Terminal:
+Install Python 3.7.3 with Homebrew:
+`brew install https://raw.githubusercontent.com/Homebrew/homebrew-core/c24d6bcd4795e9263617e49f340cc61498eea5d3/Formula/python.rb`
 
-`brew install python3`
+Install virtualenv:
+`pip install virtualenv`
 
-Install a virtual environment (virtualenv):
-
-`sudo pip3 install virtualenv`
 
 Create virtual environment for this specific app using Python 3.7:
 
-`virtualenv -p python3.7 msgtoeml_env`
+`virtualenv -p python3 msgtoeml_env`
 
 Activate the virtual environment:
 
@@ -46,15 +32,16 @@ Activate the virtual environment:
 
 Install requirements.txt
 
-pip install -r requirements.txt
+`pip install -r requirements.txt`
 
-TODO: Add step to use modified compoundfiles and convert-outlook-msg-file
+Replace files using files at compoundfiles folder: 
+- \__init__.py
+- reader_msg_format.py
+_ reader.py
 
-Compile with pyinstaller
-pyinstaller pyinstaller --noconsole Convert\ msg\ to\ eml.py
-=======
+Replace files at this location:
 
-`pip3 install requirements.txt`
+msgtoeml_env > lib > python3.7 > site-packages > compound-files
 
 Compile with pyinstaller:
 
