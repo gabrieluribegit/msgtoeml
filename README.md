@@ -39,7 +39,7 @@ Install requirements.txt
 - reader_msg_format.py
 - reader.py
 
-Replace files at this location:
+Replace files at your msgtoeml_env location:
 
 msgtoeml_env > lib > python3.7 > site-packages > compound-files
 
