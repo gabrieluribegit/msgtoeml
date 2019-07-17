@@ -35,7 +35,7 @@ Install requirements.txt
 `pip install -r requirements.txt`
 
 ### Replace files using files at compoundfiles folder: 
-- __init__.py
+- \_\_init\_\_.py
 - reader_msg_format.py
 - reader.py
 
