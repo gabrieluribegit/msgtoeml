@@ -1,829 +1,134 @@
 import sys, os, xml.dom.minidom
-from PyQt5.QtWidgets import QApplication, QWidget, QInputDialog, QLineEdit, \
-QFileDialog, QLabel, QVBoxLayout, QPushButton, QPlainTextEdit
-from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import pyqtSlot
-
-# import outlookmsgfile
-
-# This module converts a Microsoft Outlook .msg file into
-# a MIME message that can be loaded by most email programs
-# or inspected in a text editor.
-#
-# This script relies on the Python package compoundfiles
-# for reading the .msg container format.
-#
-# Referencecs:
-#
-# https://msdn.microsoft.com/en-us/library/cc463912.aspx
-# https://msdn.microsoft.com/en-us/library/cc463900(v=exchg.80).aspx
-# https://msdn.microsoft.com/en-us/library/ee157583(v=exchg.80).aspx
-# https://blogs.msdn.microsoft.com/openspecification/2009/11/06/msg-file-format-part-1/
-
-import re
-import sys
-
-from functools import reduce
 
 import urllib.parse
-import email.message, email.parser, email.policy
-from email.utils import parsedate_to_datetime, formatdate, formataddr
 
-import compoundfiles
+import base64
 
+from PyQt5.QtWidgets import QApplication, QWidget, QInputDialog, QLineEdit, \
+QFileDialog, QLabel, QVBoxLayout, QPushButton, QPlainTextEdit, QToolTip, \
+QGridLayout, QComboBox, QFrame, QGroupBox
+from PyQt5.QtGui import QIcon, QFont
+from PyQt5.QtCore import pyqtSlot
 
-# MAIN FUNCTIONS
+# Modified from https://github.com/JoshData/convert-outlook-msg-file
+from outlookmsgfile import *
 
-
-def load(filename_or_stream):
-  with compoundfiles.CompoundFileReader(filename_or_stream) as doc:
-    doc.rtf_attachments = 0
-    return load_message_stream(doc.root, True, doc)
-
-
-def load_message_stream(entry, is_top_level, doc):
-  # Load stream data.
-  props = parse_properties(entry['__properties_version1.0'], is_top_level, entry, doc)
-
-  # Construct the MIME message....
-  try:
-      msg = email.message.EmailMessage()
-  except e:
-      # pass
-      print(f'File corrupted or not msg format {e}')
-      sys.exit(1)
-      # return
-  msg = email.message.EmailMessage()
-
-  # Add the raw headers, if known.
-  if 'TRANSPORT_MESSAGE_HEADERS' in props:
-    # Get the string holding all of the headers.
-    headers = props['TRANSPORT_MESSAGE_HEADERS']
-    if isinstance(headers, bytes):
-      headers = headers.decode("utf-8")
-
-    # Remove content-type header because the body we can get this
-    # way is just the plain-text portion of the email and whatever
-    # Content-Type header was in the original is not valid for
-    # reconstructing it this way.
-    headers = re.sub("Content-Type: .*(\n\s.*)*\n", "", headers, re.I)
-
-    # Parse them.
-    headers = email.parser.HeaderParser(policy=email.policy.default)\
-      .parsestr(headers)
-
-    # Copy them into the message object.
-    for header, value in headers.items():
-      msg[header] = value
-
-  else:
-    # Construct common headers from metadata.
-
-    msg['Date'] = formatdate(props['MESSAGE_DELIVERY_TIME'].timestamp())
-    del props['MESSAGE_DELIVERY_TIME']
-
-    if props['SENDER_NAME'] != props['SENT_REPRESENTING_NAME']:
-      props['SENDER_NAME'] += " (" + props['SENT_REPRESENTING_NAME'] + ")"
-    del props['SENT_REPRESENTING_NAME']
-    msg['From'] = formataddr((props['SENDER_NAME'], ""))
-    del props['SENDER_NAME']
-
-    msg['To'] = props['DISPLAY_TO']
-    del props['DISPLAY_TO']
-
-    msg['CC'] = props['DISPLAY_CC']
-    del props['DISPLAY_CC']
-
-    msg['BCC'] = props['DISPLAY_BCC']
-    del props['DISPLAY_BCC']
-
-    msg['Subject'] = props['SUBJECT']
-    del props['SUBJECT']
-
-  # Add the plain-text body from the BODY field.
-  if 'BODY' in props:
-    body = props['BODY']
-    if isinstance(body, str):
-      msg.set_content(body, cte='quoted-printable')
-    else:
-      msg.set_content(body, maintype="text", subtype="plain", cte='8bit')
-
-  # Plain-text is not availabe. Use the rich text version.
-  else:
-    doc.rtf_attachments += 1
-    fn = "messagebody_{}.rtf".format(doc.rtf_attachments)
-
-    msg.set_content(
-      "<no plain text message body --- see attachment {}>".format(fn),
-      cte='quoted-printable')
-
-    # Decompress the value to Rich Text Format.
-    import compressed_rtf
-    rtf = props['RTF_COMPRESSED']
-    rtf = compressed_rtf.decompress(rtf)
-
-    # Add RTF file as an attachment.
-    msg.add_attachment(
-      rtf,
-      maintype="text", subtype="rtf",
-      filename=fn)
-
-  # # Copy over string values of remaining properties as headers
-  # # so we don't lose any information.
-  # for k, v in props.items():
-  #   if k == 'RTF_COMPRESSED': continue # not interested, save output
-  #   msg[k] = str(v)
-
-  # Add attachments.
-  for stream in entry:
-    if stream.name.startswith("__attach_version1.0_#"):
-      process_attachment(msg, stream, doc)
-
-  return msg
-
-
-def process_attachment(msg, entry, doc):
-  # Load attachment stream.
-  props = parse_properties(entry['__properties_version1.0'], False, entry, doc)
-
-  # The attachment content...
-  blob = props['ATTACH_DATA_BIN']
-
-  # Get the filename and MIME type of the attachment.
-  filename = props.get("ATTACH_FILENAME") or props.get("DISPLAY_NAME")
-  if isinstance(filename, bytes): filename = filename.decode("utf8")
-
-  mime_type = props.get('ATTACH_MIME_TAG', 'application/octet-stream')
-  if isinstance(mime_type, bytes): mime_type = mime_type.decode("utf8")
-
-  filename = urllib.parse.quote_plus(filename)
-
-  # Python 3.6.
-  if isinstance(blob, str):
-    msg.add_attachment(
-      blob,
-      filename=filename)
-  elif isinstance(blob, bytes):
-    msg.add_attachment(
-      blob,
-      maintype=mime_type.split("/", 1)[0], subtype=mime_type.split("/", 1)[-1],
-      filename=filename)
-  else: # a Message instance
-    msg.add_attachment(
-      blob,
-      filename=filename)
-
-def parse_properties(properties, is_top_level, container, doc):
-  # Read a properties stream and return a Python dictionary
-  # of the fields and values, using human-readable field names
-  # in the mapping at the top of this module.
-
-  # Load stream content.
-  with doc.open(properties) as stream:
-    stream = stream.read()
-
-  # Skip header.
-  i = (32 if is_top_level else 24)
-
-  # Read 16-byte entries.
-  ret = { }
-  while i < len(stream):
-    # Read the entry.
-    property_type  = stream[i+0:i+2]
-    property_tag = stream[i+2:i+4]
-    flags = stream[i+4:i+8]
-    value = stream[i+8:i+16]
-    i += 16
-
-    # Turn the byte strings into numbers and look up the property type.
-    property_type = property_type[0] + (property_type[1]<<8)
-    property_tag = property_tag[0] + (property_tag[1]<<8)
-    if property_tag not in property_tags: continue # should not happen
-    tag_name, _ = property_tags[property_tag]
-    tag_type = property_types.get(property_type)
-
-    # Fixed Length Properties.
-    if isinstance(tag_type, FixedLengthValueLoader):
-      value = tag_type.load(value)
-
-    # Variable Length Properties.
-    elif isinstance(tag_type, VariableLengthValueLoader):
-      value_length = stream[i+8:i+12] # not used
-
-      # Look up the stream in the document that holds the value.
-      streamname = "__substg1.0_{0:0{1}X}{2:0{3}X}".format(property_tag,4, property_type,4)
-      try:
-        with doc.open(container[streamname]) as innerstream:
-          value = innerstream.read()
-      except:
-        # Stream isn't present!
-        print("stream missing", streamname, file=sys.stderr)
-        continue
-
-      value = tag_type.load(value)
-
-    elif isinstance(tag_type, EMBEDDED_MESSAGE):
-      # Look up the stream in the document that holds the attachment.
-      streamname = "__substg1.0_{0:0{1}X}{2:0{3}X}".format(property_tag,4, property_type,4)
-      try:
-        value = container[streamname]
-      except:
-        # Stream isn't present!
-        print("stream missing", streamname, file=sys.stderr)
-        continue
-      value = tag_type.load(value, doc)
-
-    else:
-      # unrecognized type
-      print("unhandled property type", hex(property_type), file=sys.stderr)
-      continue
-
-    ret[tag_name] = value
-
-  return ret
-
-
-# PROPERTY VALUE LOADERS
-
-class FixedLengthValueLoader(object):
-  pass
-
-class NULL(FixedLengthValueLoader):
-  @staticmethod
-  def load(value):
-    # value is an eight-byte long bytestring with unused content.
-    return None
-
-class BOOLEAN(FixedLengthValueLoader):
-  @staticmethod
-  def load(value):
-    # value is an eight-byte long bytestring holding a two-byte integer.
-    return value[0] == 1
-
-class INTEGER16(FixedLengthValueLoader):
-  @staticmethod
-  def load(value):
-    # value is an eight-byte long bytestring holding a two-byte integer.
-    return reduce(lambda a, b : (a<<8)+b, reversed(value[0:2]))
-
-class INTEGER32(FixedLengthValueLoader):
-  @staticmethod
-  def load(value):
-    # value is an eight-byte long bytestring holding a four-byte integer.
-    return reduce(lambda a, b : (a<<8)+b, reversed(value[0:4]))
-
-class INTEGER64(FixedLengthValueLoader):
-  @staticmethod
-  def load(value):
-    # value is an eight-byte long bytestring holding an eight-byte integer.
-    return reduce(lambda a, b : (a<<8)+b, reversed(value))
-
-class INTTIME(FixedLengthValueLoader):
-  @staticmethod
-  def load(value):
-    # value is an eight-byte long bytestring encoding the integer number of
-    # 100-nanosecond intervals since January 1, 1601.
-    from datetime import datetime, timedelta
-    value = reduce(lambda a, b : (a<<8)+b, reversed(value)) # bytestring to integer
-    value = datetime(1601, 1, 1) + timedelta(seconds=value/10000000)
-    return value
-
-# TODO: The other fixed-length data types:
-# "FLOAT", "DOUBLE", "CURRENCY", "APPTIME", "ERROR"
-
-class VariableLengthValueLoader(object):
-  pass
-
-class BINARY(VariableLengthValueLoader):
-  @staticmethod
-  def load(value):
-    # value is a bytestring. Just return it.
-    return value
-
-class STRING8(VariableLengthValueLoader):
-  @staticmethod
-  def load(value):
-    # value is a bytestring. I haven't seen specified what character encoding
-    # is used when the Unicode storage type is not used, so we'll assume it's
-    # ASCII or Latin-1 like but we'll use UTF-8 to cover the bases.
-    return value.decode("utf8")
-
-class UNICODE(VariableLengthValueLoader):
-  @staticmethod
-  def load(value):
-    # value is a bytestring. I haven't seen specified what character encoding
-    # is used when the Unicode storage type is not used, so we'll assume it's
-    # ASCII or Latin-1 like but we'll use UTF-8 to cover the bases.
-    return value.decode("utf16")
-
-# TODO: The other variable-length tag types are "CLSID", "OBJECT".
-
-class EMBEDDED_MESSAGE(object):
-  @staticmethod
-  def load(entry, doc):
-    return load_message_stream(entry, False, doc)
-
-
-# CONSTANTS
-
-# These constants are defined by the Microsoft Outlook file format
-# and identify the data types and data fields in the .msg file.
-
-# from mapidefs.h via https://github.com/inverse-inc/openchange.old/blob/master/libmapi/mapidefs.h
-property_types = {
-  0x1: NULL(),
-  0x2: INTEGER16(),
-  0x3: INTEGER32(),
-  0x4: "FLOAT",
-  0x5: "DOUBLE",
-  0x6: "CURRENCY",
-  0x7: "APPTIME",
-  0xa: "ERROR",
-  0xb: BOOLEAN(),
-  0xd: EMBEDDED_MESSAGE(),
-  0x14: INTEGER64(),
-  0x1e: STRING8(),
-  0x1f: UNICODE(),
-  0x40: INTTIME(),
-  0x48: "CLSID",
-  0xFB: "SVREID",
-  0xFD: "SRESTRICT",
-  0xFE: "ACTIONS",
-  0x102: BINARY(),
-}
-
-# from mapitags.h via https://github.com/mvz/email-outlook-message-perl/blob/master/mapitags.h
-property_tags = {
-  0x01: ('ACKNOWLEDGEMENT_MODE', 'I4'),
-  0x02: ('ALTERNATE_RECIPIENT_ALLOWED', 'BOOLEAN'),
-  0x03: ('AUTHORIZING_USERS', 'BINARY'),
-  # Comment on an automatically forwarded message
-  0x04: ('AUTO_FORWARD_COMMENT', 'STRING'),
-  # Whether a message has been automatically forwarded
-  0x05: ('AUTO_FORWARDED', 'BOOLEAN'),
-  0x06: ('CONTENT_CONFIDENTIALITY_ALGORITHM_ID', 'BINARY'),
-  0x07: ('CONTENT_CORRELATOR', 'BINARY'),
-  0x08: ('CONTENT_IDENTIFIER', 'STRING'),
-  # MIME content length
-  0x09: ('CONTENT_LENGTH', 'I4'),
-  0x0A: ('CONTENT_RETURN_REQUESTED', 'BOOLEAN'),
-  0x0B: ('CONVERSATION_KEY', 'BINARY'),
-  0x0C: ('CONVERSION_EITS', 'BINARY'),
-  0x0D: ('CONVERSION_WITH_LOSS_PROHIBITED', 'BOOLEAN'),
-  0x0E: ('CONVERTED_EITS', 'BINARY'),
-  # Time to deliver for delayed delivery messages
-  0x0F: ('DEFERRED_DELIVERY_TIME', 'SYSTIME'),
-  0x10: ('DELIVER_TIME', 'SYSTIME'),
-  # Reason a message was discarded
-  0x11: ('DISCARD_REASON', 'I4'),
-  0x12: ('DISCLOSURE_OF_RECIPIENTS', 'BOOLEAN'),
-  0x13: ('DL_EXPANSION_HISTORY', 'BINARY'),
-  0x14: ('DL_EXPANSION_PROHIBITED', 'BOOLEAN'),
-  0x15: ('EXPIRY_TIME', 'SYSTIME'),
-  0x16: ('IMPLICIT_CONVERSION_PROHIBITED', 'BOOLEAN'),
-  # Message importance
-  0x17: ('IMPORTANCE', 'I4'),
-  0x18: ('IPM_ID', 'BINARY'),
-  0x19: ('LATEST_DELIVERY_TIME', 'SYSTIME'),
-  0x1A: ('MESSAGE_CLASS', 'STRING'),
-  0x1B: ('MESSAGE_DELIVERY_ID', 'BINARY'),
-  0x1E: ('MESSAGE_SECURITY_LABEL', 'BINARY'),
-  0x1F: ('OBSOLETED_IPMS', 'BINARY'),
-  # Person a message was originally for
-  0x20: ('ORIGINALLY_INTENDED_RECIPIENT_NAME', 'BINARY'),
-  0x21: ('ORIGINAL_EITS', 'BINARY'),
-  0x22: ('ORIGINATOR_CERTIFICATE', 'BINARY'),
-  0x23: ('ORIGINATOR_DELIVERY_REPORT_REQUESTED', 'BOOLEAN'),
-  # Address of the message sender
-  0x24: ('ORIGINATOR_RETURN_ADDRESS', 'BINARY'),
-  0x25: ('PARENT_KEY', 'BINARY'),
-  0x26: ('PRIORITY', 'I4'),
-  0x27: ('ORIGIN_CHECK', 'BINARY'),
-  0x28: ('PROOF_OF_SUBMISSION_REQUESTED', 'BOOLEAN'),
-  # Whether a read receipt is desired
-  0x29: ('READ_RECEIPT_REQUESTED', 'BOOLEAN'),
-  # Time a message was received
-  0x2A: ('RECEIPT_TIME', 'SYSTIME'),
-  0x2B: ('RECIPIENT_REASSIGNMENT_PROHIBITED', 'BOOLEAN'),
-  0x2C: ('REDIRECTION_HISTORY', 'BINARY'),
-  0x2D: ('RELATED_IPMS', 'BINARY'),
-  # Sensitivity of the original message
-  0x2E: ('ORIGINAL_SENSITIVITY', 'I4'),
-  0x2F: ('LANGUAGES', 'STRING'),
-  0x30: ('REPLY_TIME', 'SYSTIME'),
-  0x31: ('REPORT_TAG', 'BINARY'),
-  0x32: ('REPORT_TIME', 'SYSTIME'),
-  0x33: ('RETURNED_IPM', 'BOOLEAN'),
-  0x34: ('SECURITY', 'I4'),
-  0x35: ('INCOMPLETE_COPY', 'BOOLEAN'),
-  0x36: ('SENSITIVITY', 'I4'),
-  # The message subject
-  0x37: ('SUBJECT', 'STRING'),
-  0x38: ('SUBJECT_IPM', 'BINARY'),
-  0x39: ('CLIENT_SUBMIT_TIME', 'SYSTIME'),
-  0x3A: ('REPORT_NAME', 'STRING'),
-  0x3B: ('SENT_REPRESENTING_SEARCH_KEY', 'BINARY'),
-  0x3C: ('X400_CONTENT_TYPE', 'BINARY'),
-  0x3D: ('SUBJECT_PREFIX', 'STRING'),
-  0x3E: ('NON_RECEIPT_REASON', 'I4'),
-  0x3F: ('RECEIVED_BY_ENTRYID', 'BINARY'),
-  # Received by: entry
-  0x40: ('RECEIVED_BY_NAME', 'STRING'),
-  0x41: ('SENT_REPRESENTING_ENTRYID', 'BINARY'),
-  0x42: ('SENT_REPRESENTING_NAME', 'STRING'),
-  0x43: ('RCVD_REPRESENTING_ENTRYID', 'BINARY'),
-  0x44: ('RCVD_REPRESENTING_NAME', 'STRING'),
-  0x45: ('REPORT_ENTRYID', 'BINARY'),
-  0x46: ('READ_RECEIPT_ENTRYID', 'BINARY'),
-  0x47: ('MESSAGE_SUBMISSION_ID', 'BINARY'),
-  0x48: ('PROVIDER_SUBMIT_TIME', 'SYSTIME'),
-  # Subject of the original message
-  0x49: ('ORIGINAL_SUBJECT', 'STRING'),
-  0x4A: ('DISC_VAL', 'BOOLEAN'),
-  0x4B: ('ORIG_MESSAGE_CLASS', 'STRING'),
-  0x4C: ('ORIGINAL_AUTHOR_ENTRYID', 'BINARY'),
-  # Author of the original message
-  0x4D: ('ORIGINAL_AUTHOR_NAME', 'STRING'),
-  # Time the original message was submitted
-  0x4E: ('ORIGINAL_SUBMIT_TIME', 'SYSTIME'),
-  0x4F: ('REPLY_RECIPIENT_ENTRIES', 'BINARY'),
-  0x50: ('REPLY_RECIPIENT_NAMES', 'STRING'),
-  0x51: ('RECEIVED_BY_SEARCH_KEY', 'BINARY'),
-  0x52: ('RCVD_REPRESENTING_SEARCH_KEY', 'BINARY'),
-  0x53: ('READ_RECEIPT_SEARCH_KEY', 'BINARY'),
-  0x54: ('REPORT_SEARCH_KEY', 'BINARY'),
-  0x55: ('ORIGINAL_DELIVERY_TIME', 'SYSTIME'),
-  0x56: ('ORIGINAL_AUTHOR_SEARCH_KEY', 'BINARY'),
-  0x57: ('MESSAGE_TO_ME', 'BOOLEAN'),
-  0x58: ('MESSAGE_CC_ME', 'BOOLEAN'),
-  0x59: ('MESSAGE_RECIP_ME', 'BOOLEAN'),
-  # Sender of the original message
-  0x5A: ('ORIGINAL_SENDER_NAME', 'STRING'),
-  0x5B: ('ORIGINAL_SENDER_ENTRYID', 'BINARY'),
-  0x5C: ('ORIGINAL_SENDER_SEARCH_KEY', 'BINARY'),
-  0x5D: ('ORIGINAL_SENT_REPRESENTING_NAME', 'STRING'),
-  0x5E: ('ORIGINAL_SENT_REPRESENTING_ENTRYID', 'BINARY'),
-  0x5F: ('ORIGINAL_SENT_REPRESENTING_SEARCH_KEY', 'BINARY'),
-  0x60: ('START_DATE', 'SYSTIME'),
-  0x61: ('END_DATE', 'SYSTIME'),
-  0x62: ('OWNER_APPT_ID', 'I4'),
-  # Whether a response to the message is desired
-  0x63: ('RESPONSE_REQUESTED', 'BOOLEAN'),
-  0x64: ('SENT_REPRESENTING_ADDRTYPE', 'STRING'),
-  0x65: ('SENT_REPRESENTING_EMAIL_ADDRESS', 'STRING'),
-  0x66: ('ORIGINAL_SENDER_ADDRTYPE', 'STRING'),
-  # Email of the original message sender
-  0x67: ('ORIGINAL_SENDER_EMAIL_ADDRESS', 'STRING'),
-  0x68: ('ORIGINAL_SENT_REPRESENTING_ADDRTYPE', 'STRING'),
-  0x69: ('ORIGINAL_SENT_REPRESENTING_EMAIL_ADDRESS', 'STRING'),
-  0x70: ('CONVERSATION_TOPIC', 'STRING'),
-  0x71: ('CONVERSATION_INDEX', 'BINARY'),
-  0x72: ('ORIGINAL_DISPLAY_BCC', 'STRING'),
-  0x73: ('ORIGINAL_DISPLAY_CC', 'STRING'),
-  0x74: ('ORIGINAL_DISPLAY_TO', 'STRING'),
-  0x75: ('RECEIVED_BY_ADDRTYPE', 'STRING'),
-  0x76: ('RECEIVED_BY_EMAIL_ADDRESS', 'STRING'),
-  0x77: ('RCVD_REPRESENTING_ADDRTYPE', 'STRING'),
-  0x78: ('RCVD_REPRESENTING_EMAIL_ADDRESS', 'STRING'),
-  0x79: ('ORIGINAL_AUTHOR_ADDRTYPE', 'STRING'),
-  0x7A: ('ORIGINAL_AUTHOR_EMAIL_ADDRESS', 'STRING'),
-  0x7B: ('ORIGINALLY_INTENDED_RECIP_ADDRTYPE', 'STRING'),
-  0x7C: ('ORIGINALLY_INTENDED_RECIP_EMAIL_ADDRESS', 'STRING'),
-  0x7D: ('TRANSPORT_MESSAGE_HEADERS', 'STRING'),
-  0x7E: ('DELEGATION', 'BINARY'),
-  0x7F: ('TNEF_CORRELATION_KEY', 'BINARY'),
-  0x1000: ('BODY', 'STRING'),
-  0x1001: ('REPORT_TEXT', 'STRING'),
-  0x1002: ('ORIGINATOR_AND_DL_EXPANSION_HISTORY', 'BINARY'),
-  0x1003: ('REPORTING_DL_NAME', 'BINARY'),
-  0x1004: ('REPORTING_MTA_CERTIFICATE', 'BINARY'),
-  0x1006: ('RTF_SYNC_BODY_CRC', 'I4'),
-  0x1007: ('RTF_SYNC_BODY_COUNT', 'I4'),
-  0x1008: ('RTF_SYNC_BODY_TAG', 'STRING'),
-  0x1009: ('RTF_COMPRESSED', 'BINARY'),
-  0x1010: ('RTF_SYNC_PREFIX_COUNT', 'I4'),
-  0x1011: ('RTF_SYNC_TRAILING_COUNT', 'I4'),
-  0x1012: ('ORIGINALLY_INTENDED_RECIP_ENTRYID', 'BINARY'),
-  0x0C00: ('CONTENT_INTEGRITY_CHECK', 'BINARY'),
-  0x0C01: ('EXPLICIT_CONVERSION', 'I4'),
-  0x0C02: ('IPM_RETURN_REQUESTED', 'BOOLEAN'),
-  0x0C03: ('MESSAGE_TOKEN', 'BINARY'),
-  0x0C04: ('NDR_REASON_CODE', 'I4'),
-  0x0C05: ('NDR_DIAG_CODE', 'I4'),
-  0x0C06: ('NON_RECEIPT_NOTIFICATION_REQUESTED', 'BOOLEAN'),
-  0x0C07: ('DELIVERY_POINT', 'I4'),
-  0x0C08: ('ORIGINATOR_NON_DELIVERY_REPORT_REQUESTED', 'BOOLEAN'),
-  0x0C09: ('ORIGINATOR_REQUESTED_ALTERNATE_RECIPIENT', 'BINARY'),
-  0x0C0A: ('PHYSICAL_DELIVERY_BUREAU_FAX_DELIVERY', 'BOOLEAN'),
-  0x0C0B: ('PHYSICAL_DELIVERY_MODE', 'I4'),
-  0x0C0C: ('PHYSICAL_DELIVERY_REPORT_REQUEST', 'I4'),
-  0x0C0D: ('PHYSICAL_FORWARDING_ADDRESS', 'BINARY'),
-  0x0C0E: ('PHYSICAL_FORWARDING_ADDRESS_REQUESTED', 'BOOLEAN'),
-  0x0C0F: ('PHYSICAL_FORWARDING_PROHIBITED', 'BOOLEAN'),
-  0x0C10: ('PHYSICAL_RENDITION_ATTRIBUTES', 'BINARY'),
-  0x0C11: ('PROOF_OF_DELIVERY', 'BINARY'),
-  0x0C12: ('PROOF_OF_DELIVERY_REQUESTED', 'BOOLEAN'),
-  0x0C13: ('RECIPIENT_CERTIFICATE', 'BINARY'),
-  0x0C14: ('RECIPIENT_NUMBER_FOR_ADVICE', 'STRING'),
-  0x0C15: ('RECIPIENT_TYPE', 'I4'),
-  0x0C16: ('REGISTERED_MAIL_TYPE', 'I4'),
-  0x0C17: ('REPLY_REQUESTED', 'BOOLEAN'),
-  0x0C18: ('REQUESTED_DELIVERY_METHOD', 'I4'),
-  0x0C19: ('SENDER_ENTRYID', 'BINARY'),
-  0x0C1A: ('SENDER_NAME', 'STRING'),
-  0x0C1B: ('SUPPLEMENTARY_INFO', 'STRING'),
-  0x0C1C: ('TYPE_OF_MTS_USER', 'I4'),
-  0x0C1D: ('SENDER_SEARCH_KEY', 'BINARY'),
-  0x0C1E: ('SENDER_ADDRTYPE', 'STRING'),
-  0x0C1F: ('SENDER_EMAIL_ADDRESS', 'STRING'),
-  0x0E00: ('CURRENT_VERSION', 'I8'),
-  0x0E01: ('DELETE_AFTER_SUBMIT', 'BOOLEAN'),
-  0x0E02: ('DISPLAY_BCC', 'STRING'),
-  0x0E03: ('DISPLAY_CC', 'STRING'),
-  0x0E04: ('DISPLAY_TO', 'STRING'),
-  0x0E05: ('PARENT_DISPLAY', 'STRING'),
-  0x0E06: ('MESSAGE_DELIVERY_TIME', 'SYSTIME'),
-  0x0E07: ('MESSAGE_FLAGS', 'I4'),
-  0x0E08: ('MESSAGE_SIZE', 'I4'),
-  0x0E09: ('PARENT_ENTRYID', 'BINARY'),
-  0x0E0A: ('SENTMAIL_ENTRYID', 'BINARY'),
-  0x0E0C: ('CORRELATE', 'BOOLEAN'),
-  0x0E0D: ('CORRELATE_MTSID', 'BINARY'),
-  0x0E0E: ('DISCRETE_VALUES', 'BOOLEAN'),
-  0x0E0F: ('RESPONSIBILITY', 'BOOLEAN'),
-  0x0E10: ('SPOOLER_STATUS', 'I4'),
-  0x0E11: ('TRANSPORT_STATUS', 'I4'),
-  0x0E12: ('MESSAGE_RECIPIENTS', 'OBJECT'),
-  0x0E13: ('MESSAGE_ATTACHMENTS', 'OBJECT'),
-  0x0E14: ('SUBMIT_FLAGS', 'I4'),
-  0x0E15: ('RECIPIENT_STATUS', 'I4'),
-  0x0E16: ('TRANSPORT_KEY', 'I4'),
-  0x0E17: ('MSG_STATUS', 'I4'),
-  0x0E18: ('MESSAGE_DOWNLOAD_TIME', 'I4'),
-  0x0E19: ('CREATION_VERSION', 'I8'),
-  0x0E1A: ('MODIFY_VERSION', 'I8'),
-  0x0E1B: ('HASATTACH', 'BOOLEAN'),
-  0x0E1D: ('NORMALIZED_SUBJECT', 'STRING'),
-  0x0E1F: ('RTF_IN_SYNC', 'BOOLEAN'),
-  0x0E20: ('ATTACH_SIZE', 'I4'),
-  0x0E21: ('ATTACH_NUM', 'I4'),
-  0x0E22: ('PREPROCESS', 'BOOLEAN'),
-  0x0E25: ('ORIGINATING_MTA_CERTIFICATE', 'BINARY'),
-  0x0E26: ('PROOF_OF_SUBMISSION', 'BINARY'),
-  # A unique identifier for editing the properties of a MAPI object
-  0x0FFF: ('ENTRYID', 'BINARY'),
-  # The type of an object
-  0x0FFE: ('OBJECT_TYPE', 'I4'),
-  0x0FFD: ('ICON', 'BINARY'),
-  0x0FFC: ('MINI_ICON', 'BINARY'),
-  0x0FFB: ('STORE_ENTRYID', 'BINARY'),
-  0x0FFA: ('STORE_RECORD_KEY', 'BINARY'),
-  # Binary identifer for an individual object
-  0x0FF9: ('RECORD_KEY', 'BINARY'),
-  0x0FF8: ('MAPPING_SIGNATURE', 'BINARY'),
-  0x0FF7: ('ACCESS_LEVEL', 'I4'),
-  # The primary key of a column in a table
-  0x0FF6: ('INSTANCE_KEY', 'BINARY'),
-  0x0FF5: ('ROW_TYPE', 'I4'),
-  0x0FF4: ('ACCESS', 'I4'),
-  0x3000: ('ROWID', 'I4'),
-  # The name to display for a given MAPI object
-  0x3001: ('DISPLAY_NAME', 'STRING'),
-  0x3002: ('ADDRTYPE', 'STRING'),
-  # An email address
-  0x3003: ('EMAIL_ADDRESS', 'STRING'),
-  # A comment field
-  0x3004: ('COMMENT', 'STRING'),
-  0x3005: ('DEPTH', 'I4'),
-  # Provider-defined display name for a service provider
-  0x3006: ('PROVIDER_DISPLAY', 'STRING'),
-  # The time an object was created
-  0x3007: ('CREATION_TIME', 'SYSTIME'),
-  # The time an object was last modified
-  0x3008: ('LAST_MODIFICATION_TIME', 'SYSTIME'),
-  # Flags describing a service provider, message service, or status object
-  0x3009: ('RESOURCE_FLAGS', 'I4'),
-  # The name of a provider dll, minus any "32" suffix and ".dll"
-  0x300A: ('PROVIDER_DLL_NAME', 'STRING'),
-  0x300B: ('SEARCH_KEY', 'BINARY'),
-  0x300C: ('PROVIDER_UID', 'BINARY'),
-  0x300D: ('PROVIDER_ORDINAL', 'I4'),
-  0x3301: ('FORM_VERSION', 'STRING'),
-  0x3302: ('FORM_CLSID', 'CLSID'),
-  0x3303: ('FORM_CONTACT_NAME', 'STRING'),
-  0x3304: ('FORM_CATEGORY', 'STRING'),
-  0x3305: ('FORM_CATEGORY_SUB', 'STRING'),
-  0x3306: ('FORM_HOST_MAP', 'MV_LONG'),
-  0x3307: ('FORM_HIDDEN', 'BOOLEAN'),
-  0x3308: ('FORM_DESIGNER_NAME', 'STRING'),
-  0x3309: ('FORM_DESIGNER_GUID', 'CLSID'),
-  0x330A: ('FORM_MESSAGE_BEHAVIOR', 'I4'),
-  # Is this row the default message store?
-  0x3400: ('DEFAULT_STORE', 'BOOLEAN'),
-  0x340D: ('STORE_SUPPORT_MASK', 'I4'),
-  0x340E: ('STORE_STATE', 'I4'),
-  0x3410: ('IPM_SUBTREE_SEARCH_KEY', 'BINARY'),
-  0x3411: ('IPM_OUTBOX_SEARCH_KEY', 'BINARY'),
-  0x3412: ('IPM_WASTEBASKET_SEARCH_KEY', 'BINARY'),
-  0x3413: ('IPM_SENTMAIL_SEARCH_KEY', 'BINARY'),
-  # Provder-defined message store type
-  0x3414: ('MDB_PROVIDER', 'BINARY'),
-  0x3415: ('RECEIVE_FOLDER_SETTINGS', 'OBJECT'),
-  0x35DF: ('VALID_FOLDER_MASK', 'I4'),
-  0x35E0: ('IPM_SUBTREE_ENTRYID', 'BINARY'),
-  0x35E2: ('IPM_OUTBOX_ENTRYID', 'BINARY'),
-  0x35E3: ('IPM_WASTEBASKET_ENTRYID', 'BINARY'),
-  0x35E4: ('IPM_SENTMAIL_ENTRYID', 'BINARY'),
-  0x35E5: ('VIEWS_ENTRYID', 'BINARY'),
-  0x35E6: ('COMMON_VIEWS_ENTRYID', 'BINARY'),
-  0x35E7: ('FINDER_ENTRYID', 'BINARY'),
-  0x3600: ('CONTAINER_FLAGS', 'I4'),
-  0x3601: ('FOLDER_TYPE', 'I4'),
-  0x3602: ('CONTENT_COUNT', 'I4'),
-  0x3603: ('CONTENT_UNREAD', 'I4'),
-  0x3604: ('CREATE_TEMPLATES', 'OBJECT'),
-  0x3605: ('DETAILS_TABLE', 'OBJECT'),
-  0x3607: ('SEARCH', 'OBJECT'),
-  0x3609: ('SELECTABLE', 'BOOLEAN'),
-  0x360A: ('SUBFOLDERS', 'BOOLEAN'),
-  0x360B: ('STATUS', 'I4'),
-  0x360C: ('ANR', 'STRING'),
-  0x360D: ('CONTENTS_SORT_ORDER', 'MV_LONG'),
-  0x360E: ('CONTAINER_HIERARCHY', 'OBJECT'),
-  0x360F: ('CONTAINER_CONTENTS', 'OBJECT'),
-  0x3610: ('FOLDER_ASSOCIATED_CONTENTS', 'OBJECT'),
-  0x3611: ('DEF_CREATE_DL', 'BINARY'),
-  0x3612: ('DEF_CREATE_MAILUSER', 'BINARY'),
-  0x3613: ('CONTAINER_CLASS', 'STRING'),
-  0x3614: ('CONTAINER_MODIFY_VERSION', 'I8'),
-  0x3615: ('AB_PROVIDER_ID', 'BINARY'),
-  0x3616: ('DEFAULT_VIEW_ENTRYID', 'BINARY'),
-  0x3617: ('ASSOC_CONTENT_COUNT', 'I4'),
-  0x3700: ('ATTACHMENT_X400_PARAMETERS', 'BINARY'),
-  0x3701: ('ATTACH_DATA_OBJ', 'OBJECT'),
-  0x3701: ('ATTACH_DATA_BIN', 'BINARY'),
-  0x3702: ('ATTACH_ENCODING', 'BINARY'),
-  0x3703: ('ATTACH_EXTENSION', 'STRING'),
-  0x3704: ('ATTACH_FILENAME', 'STRING'),
-  0x3705: ('ATTACH_METHOD', 'I4'),
-  0x3707: ('ATTACH_LONG_FILENAME', 'STRING'),
-  0x3708: ('ATTACH_PATHNAME', 'STRING'),
-  0x370A: ('ATTACH_TAG', 'BINARY'),
-  0x370B: ('RENDERING_POSITION', 'I4'),
-  0x370C: ('ATTACH_TRANSPORT_NAME', 'STRING'),
-  0x370D: ('ATTACH_LONG_PATHNAME', 'STRING'),
-  0x370E: ('ATTACH_MIME_TAG', 'STRING'),
-  0x370F: ('ATTACH_ADDITIONAL_INFO', 'BINARY'),
-  0x3900: ('DISPLAY_TYPE', 'I4'),
-  0x3902: ('TEMPLATEID', 'BINARY'),
-  0x3904: ('PRIMARY_CAPABILITY', 'BINARY'),
-  0x39FF: ('7BIT_DISPLAY_NAME', 'STRING'),
-  0x3A00: ('ACCOUNT', 'STRING'),
-  0x3A01: ('ALTERNATE_RECIPIENT', 'BINARY'),
-  0x3A02: ('CALLBACK_TELEPHONE_NUMBER', 'STRING'),
-  0x3A03: ('CONVERSION_PROHIBITED', 'BOOLEAN'),
-  0x3A04: ('DISCLOSE_RECIPIENTS', 'BOOLEAN'),
-  0x3A05: ('GENERATION', 'STRING'),
-  0x3A06: ('GIVEN_NAME', 'STRING'),
-  0x3A07: ('GOVERNMENT_ID_NUMBER', 'STRING'),
-  0x3A08: ('BUSINESS_TELEPHONE_NUMBER', 'STRING'),
-  0x3A09: ('HOME_TELEPHONE_NUMBER', 'STRING'),
-  0x3A0A: ('INITIALS', 'STRING'),
-  0x3A0B: ('KEYWORD', 'STRING'),
-  0x3A0C: ('LANGUAGE', 'STRING'),
-  0x3A0D: ('LOCATION', 'STRING'),
-  0x3A0E: ('MAIL_PERMISSION', 'BOOLEAN'),
-  0x3A0F: ('MHS_COMMON_NAME', 'STRING'),
-  0x3A10: ('ORGANIZATIONAL_ID_NUMBER', 'STRING'),
-  0x3A11: ('SURNAME', 'STRING'),
-  0x3A12: ('ORIGINAL_ENTRYID', 'BINARY'),
-  0x3A13: ('ORIGINAL_DISPLAY_NAME', 'STRING'),
-  0x3A14: ('ORIGINAL_SEARCH_KEY', 'BINARY'),
-  0x3A15: ('POSTAL_ADDRESS', 'STRING'),
-  0x3A16: ('COMPANY_NAME', 'STRING'),
-  0x3A17: ('TITLE', 'STRING'),
-  0x3A18: ('DEPARTMENT_NAME', 'STRING'),
-  0x3A19: ('OFFICE_LOCATION', 'STRING'),
-  0x3A1A: ('PRIMARY_TELEPHONE_NUMBER', 'STRING'),
-  0x3A1B: ('BUSINESS2_TELEPHONE_NUMBER', 'STRING'),
-  0x3A1C: ('MOBILE_TELEPHONE_NUMBER', 'STRING'),
-  0x3A1D: ('RADIO_TELEPHONE_NUMBER', 'STRING'),
-  0x3A1E: ('CAR_TELEPHONE_NUMBER', 'STRING'),
-  0x3A1F: ('OTHER_TELEPHONE_NUMBER', 'STRING'),
-  0x3A20: ('TRANSMITABLE_DISPLAY_NAME', 'STRING'),
-  0x3A21: ('PAGER_TELEPHONE_NUMBER', 'STRING'),
-  0x3A22: ('USER_CERTIFICATE', 'BINARY'),
-  0x3A23: ('PRIMARY_FAX_NUMBER', 'STRING'),
-  0x3A24: ('BUSINESS_FAX_NUMBER', 'STRING'),
-  0x3A25: ('HOME_FAX_NUMBER', 'STRING'),
-  0x3A26: ('COUNTRY', 'STRING'),
-  0x3A27: ('LOCALITY', 'STRING'),
-  0x3A28: ('STATE_OR_PROVINCE', 'STRING'),
-  0x3A29: ('STREET_ADDRESS', 'STRING'),
-  0x3A2A: ('POSTAL_CODE', 'STRING'),
-  0x3A2B: ('POST_OFFICE_BOX', 'STRING'),
-  0x3A2C: ('TELEX_NUMBER', 'STRING'),
-  0x3A2D: ('ISDN_NUMBER', 'STRING'),
-  0x3A2E: ('ASSISTANT_TELEPHONE_NUMBER', 'STRING'),
-  0x3A2F: ('HOME2_TELEPHONE_NUMBER', 'STRING'),
-  0x3A30: ('ASSISTANT', 'STRING'),
-  0x3A40: ('SEND_RICH_INFO', 'BOOLEAN'),
-  0x3A41: ('WEDDING_ANNIVERSARY', 'SYSTIME'),
-  0x3A42: ('BIRTHDAY', 'SYSTIME'),
-  0x3A43: ('HOBBIES', 'STRING'),
-  0x3A44: ('MIDDLE_NAME', 'STRING'),
-  0x3A45: ('DISPLAY_NAME_PREFIX', 'STRING'),
-  0x3A46: ('PROFESSION', 'STRING'),
-  0x3A47: ('PREFERRED_BY_NAME', 'STRING'),
-  0x3A48: ('SPOUSE_NAME', 'STRING'),
-  0x3A49: ('COMPUTER_NETWORK_NAME', 'STRING'),
-  0x3A4A: ('CUSTOMER_ID', 'STRING'),
-  0x3A4B: ('TTYTDD_PHONE_NUMBER', 'STRING'),
-  0x3A4C: ('FTP_SITE', 'STRING'),
-  0x3A4D: ('GENDER', 'I2'),
-  0x3A4E: ('MANAGER_NAME', 'STRING'),
-  0x3A4F: ('NICKNAME', 'STRING'),
-  0x3A50: ('PERSONAL_HOME_PAGE', 'STRING'),
-  0x3A51: ('BUSINESS_HOME_PAGE', 'STRING'),
-  0x3A52: ('CONTACT_VERSION', 'CLSID'),
-  0x3A53: ('CONTACT_ENTRYIDS', 'MV_BINARY'),
-  0x3A54: ('CONTACT_ADDRTYPES', 'MV_STRING'),
-  0x3A55: ('CONTACT_DEFAULT_ADDRESS_INDEX', 'I4'),
-  0x3A56: ('CONTACT_EMAIL_ADDRESSES', 'MV_STRING'),
-  0x3A57: ('COMPANY_MAIN_PHONE_NUMBER', 'STRING'),
-  0x3A58: ('CHILDRENS_NAMES', 'MV_STRING'),
-  0x3A59: ('HOME_ADDRESS_CITY', 'STRING'),
-  0x3A5A: ('HOME_ADDRESS_COUNTRY', 'STRING'),
-  0x3A5B: ('HOME_ADDRESS_POSTAL_CODE', 'STRING'),
-  0x3A5C: ('HOME_ADDRESS_STATE_OR_PROVINCE', 'STRING'),
-  0x3A5D: ('HOME_ADDRESS_STREET', 'STRING'),
-  0x3A5E: ('HOME_ADDRESS_POST_OFFICE_BOX', 'STRING'),
-  0x3A5F: ('OTHER_ADDRESS_CITY', 'STRING'),
-  0x3A60: ('OTHER_ADDRESS_COUNTRY', 'STRING'),
-  0x3A61: ('OTHER_ADDRESS_POSTAL_CODE', 'STRING'),
-  0x3A62: ('OTHER_ADDRESS_STATE_OR_PROVINCE', 'STRING'),
-  0x3A63: ('OTHER_ADDRESS_STREET', 'STRING'),
-  0x3A64: ('OTHER_ADDRESS_POST_OFFICE_BOX', 'STRING'),
-  0x3D00: ('STORE_PROVIDERS', 'BINARY'),
-  0x3D01: ('AB_PROVIDERS', 'BINARY'),
-  0x3D02: ('TRANSPORT_PROVIDERS', 'BINARY'),
-  0x3D04: ('DEFAULT_PROFILE', 'BOOLEAN'),
-  0x3D05: ('AB_SEARCH_PATH', 'MV_BINARY'),
-  0x3D06: ('AB_DEFAULT_DIR', 'BINARY'),
-  0x3D07: ('AB_DEFAULT_PAB', 'BINARY'),
-  0x3D09: ('SERVICE_NAME', 'STRING'),
-  0x3D0A: ('SERVICE_DLL_NAME', 'STRING'),
-  0x3D0B: ('SERVICE_ENTRY_NAME', 'STRING'),
-  0x3D0C: ('SERVICE_UID', 'BINARY'),
-  0x3D0D: ('SERVICE_EXTRA_UIDS', 'BINARY'),
-  0x3D0E: ('SERVICES', 'BINARY'),
-  0x3D0F: ('SERVICE_SUPPORT_FILES', 'MV_STRING'),
-  0x3D10: ('SERVICE_DELETE_FILES', 'MV_STRING'),
-  0x3D11: ('AB_SEARCH_PATH_UPDATE', 'BINARY'),
-  0x3D12: ('PROFILE_NAME', 'STRING'),
-  0x3E00: ('IDENTITY_DISPLAY', 'STRING'),
-  0x3E01: ('IDENTITY_ENTRYID', 'BINARY'),
-  0x3E02: ('RESOURCE_METHODS', 'I4'),
-  # Service provider type
-  0x3E03: ('RESOURCE_TYPE', 'I4'),
-  0x3E04: ('STATUS_CODE', 'I4'),
-  0x3E05: ('IDENTITY_SEARCH_KEY', 'BINARY'),
-  0x3E06: ('OWN_STORE_ENTRYID', 'BINARY'),
-  0x3E07: ('RESOURCE_PATH', 'STRING'),
-  0x3E08: ('STATUS_STRING', 'STRING'),
-  0x3E09: ('X400_DEFERRED_DELIVERY_CANCEL', 'BOOLEAN'),
-  0x3E0A: ('HEADER_FOLDER_ENTRYID', 'BINARY'),
-  0x3E0B: ('REMOTE_PROGRESS', 'I4'),
-  0x3E0C: ('REMOTE_PROGRESS_TEXT', 'STRING'),
-  0x3E0D: ('REMOTE_VALIDATE_OK', 'BOOLEAN'),
-  0x3F00: ('CONTROL_FLAGS', 'I4'),
-  0x3F01: ('CONTROL_STRUCTURE', 'BINARY'),
-  0x3F02: ('CONTROL_TYPE', 'I4'),
-  0x3F03: ('DELTAX', 'I4'),
-  0x3F04: ('DELTAY', 'I4'),
-  0x3F05: ('XPOS', 'I4'),
-  0x3F06: ('YPOS', 'I4'),
-  0x3F07: ('CONTROL_ID', 'BINARY'),
-  0x3F08: ('INITIAL_DETAILS_PANE', 'I4'),
-}
-# COMMAND-LINE ENTRY POINT
-# NOTE: disabled since no needed
-
-# if __name__ == "__main__":
-#   # If no command-line arguments are given, convert the .msg
-#   # file on STDIN to .eml format on STDOUT.
-#   if len(sys.argv) <= 1:
-#     print(load(sys.stdin), file=sys.stdout)
+# from compoundfiles import reader_msg_format
 #
-#   # Otherwise, for each file mentioned on the command-line,
-#   # convert it and save it to a file with ".eml" appended
-#   # to the name.
-#   else:
-#     for fn in sys.argv[1:]:
-#       print(fn + "...")
-#       msg = load(fn)
-#       with open(fn + ".eml", "wb") as f:
-#         f.write(msg.as_bytes())
+# print(dir(reader_msg_format))
+
+# Modified compoundfiles https://github.com/waveform-computing/compoundfiles
+# Modified compoundfiles on local virtualenv:
+# - Added reader_msg_format.py
+# - Replaced Raise Error to self.errors and disabled print messages
+# - TODO:
+# - Changed output of this Class to return self.errors instead of instance:
+"""     def __enter__(self):
+        # return self
+        ### ggg
+        return self.errores"""
+# - Registered new class CompoundFileReader_msg_format in __init__.py
+# from check_msg_format import *
+
+# BUG:
+# Drag and Drop within app
+# https://forum.qt.io/topic/104598/supporting-dragging-from-a-qwebengineview-to-other-qwidget-in-app
+
+
+def process_file(fileName):
+    if os.path.isfile(fileName):
+
+        ### IF XCML/XML FILE extension
+        # Trigger beautify
+        if '.cxml' in fileName or '.xml' in fileName:
+            dom = xml.dom.minidom.parse(fileName) # or xml.dom.minidom.parseString(xml_string)
+            dom_string = dom.toprettyxml(indent="    ", encoding="utf-8") # 4 spaces
+            dom_string = b'\n'.join([s for s in dom_string.splitlines() if s.strip()])
+
+            console.clear()
+            console.insertPlainText("CXML / XML file\n\n")
+            console.insertPlainText("Selected ->" + fileName + "\n\n")
+
+            # Show output on GUI
+            console.insertPlainText("...beautifying...\n\n")
+
+            fileName_cxml = fileName + "_beautified.cxml"
+            with open(fileName_cxml, "wb") as f:
+                f.write(dom_string)
+            console.insertPlainText("Created ->" + fileName_cxml + "\n\n")
+            console.insertPlainText("Please open it with a text editor")
+            return
+
+        ### MSG TO EML CONVERSION
+        else:
+            msg_errors = ''
+            # Test if file is a well formated .msg despite file extension
+            print(f'+++ test fileName {fileName}')
+            msg_errors = test_msg(fileName)
+
+            # If msg file is OK
+            if not msg_errors:
+                # Convert file
+                print(f'+++ convert fileName {fileName}')
+                convert_msg(fileName)
+
+    # IF NOT isFile?
+    else:
+        self.clear()
+        self.insertPlainText("ERROR:\n\nUnrecognized file format\n\n")
+        return
+
+
+def test_msg(fileName):
+    """Test file is a well formated .msg despite file extension"""
+    console.clear()
+    console.insertPlainText("Selected ->" + fileName + "\n\n")
+    msg_errors = load_test_format(fileName)
+    # Output errors
+    if msg_errors:
+        console.insertPlainText("Converting file FAILED! Corrupted or not supported format\n\nERROR:\n" + msg_errors)
+    print(f'test_msg {msg_errors}')
+    return msg_errors
+
+
+def convert_msg(fileName):
+    """Convert file, save eml and open it"""
+    # Show output on GUI
+    console.insertPlainText("...converting...\n\n")
+
+    # Convert .msg to .eml
+    msg = load(fileName)
+
+    # if msg:
+    fileName_eml = fileName + ".eml"
+    print(f'++++++ fileName_eml {fileName_eml}')
+    # print(f'++++++ fileName_eml {msg}')
+    with open(fileName_eml, "wb") as f:
+        f.write(msg.as_bytes())
+
+
+    # Check if file created
+    if os.path.isfile(fileName_eml):
+        console.insertPlainText("Created ->" + fileName_eml + "\n\n")
+        console.insertPlainText("Opening with Mail app")
+
+        # Open file with Mac Mail app
+        open_mail = "open " + fileName_eml
+        os.system(open_mail)
+    # It does not return anything at the end, but opens the eml file
+
+def process_string(dropped_string):
+    """Count words and characters from string"""
+    string_text = dropped_string
+    string_len = str(len(string_text))
+    words_len = str(len(string_text.split()))
+    # Add to UI console
+    console.clear()
+    console.insertPlainText("String details: \n\n")
+    console.insertPlainText("- Characters count: " + string_len + "\n\n")
+    console.insertPlainText("- Word count: " + words_len + "\n\n")
+    console.insertPlainText("- String checked: \n\n" + string_text)
+
 
 class TextDrop(QPlainTextEdit):
 
@@ -832,7 +137,38 @@ class TextDrop(QPlainTextEdit):
 
         self.setAcceptDrops(True)
 
+    def dragEnterEvent(self, t):
+        if t.mimeData().hasUrls():
+            t.accept()
+        elif t.mimeData().hasFormat('text/plain'):
+            t.accept()
+        else:
+            t.ignore()
+
+    def dropEvent(self, t):
+        if t.mimeData().urls():
+            for url in t.mimeData().urls():
+                fileName = url.toLocalFile()
+
+                if os.path.isfile(fileName):
+                    # Process file
+                    process_file(fileName)
+
+        ### IF text/plain
+        else:
+            ### STRING COUNTING WORDS AND CHARS
+            process_string(t.mimeData().text())
+
+class Encode(QPlainTextEdit):
+
+    def __init__(self, title, parent):
+        super().__init__(title, parent)
+
+        self.setAcceptDrops(True)
+
     def dragEnterEvent(self, e):
+        console_encode.clear()
+        console_decode.clear()
         if e.mimeData().hasUrls():
             e.accept()
         elif e.mimeData().hasFormat('text/plain'):
@@ -841,72 +177,84 @@ class TextDrop(QPlainTextEdit):
             e.ignore()
 
     def dropEvent(self, e):
-
         if e.mimeData().urls():
-
             for url in e.mimeData().urls():
                 fileName = url.toLocalFile()
+                print(f'+++fileName {fileName}')
+        text = e.mimeData().text()
+        text_encoded = ''
+        error = ''
 
-                if os.path.isfile(fileName):
-                    print(fileName)
+        if combo.currentText() == 'Base64':
+            try:
+                text_encoded = base64.b64encode(text.encode('utf-8'))
+                text_encoded = str(text_encoded)
+                text_encoded = text_encoded[2:-1]
+                console_encode.clear()
+                console_encode.insertPlainText(text_encoded)
+                print(f'{combo.currentText()} text_encoded {text_encoded}')
+            except Exception as error:
+                # console_decode.insertPlainText('Error: ' + str(error))
+                print(f'encoding error {str(error)}')
+                console_encode.clear()
+                console_encode.insertPlainText("Converting string FAILED! Corrupted or not supported\n\nERROR:\n" + str(error))
+
+        elif combo.currentText() == 'urlencode':
+            try:
+                text_encoded = urllib.parse.quote_plus(text)
+                console_encode.clear()
+                console_encode.insertPlainText(text_encoded)
+                print(f'{combo.currentText()} text_encoded {text_encoded}')
+            except Exception as error:
+                # console_decode.insertPlainText('Error: ' + str(error))
+                print(f'encoding error {str(error)}')
+                console_encode.clear()
+                console_encode.insertPlainText("Converting string FAILED! Corrupted or not supported\n\nERROR:\n" + str(error))
 
 
-                    if '.cxml' in fileName or '.xml' in fileName:
-                        dom = xml.dom.minidom.parse(fileName) # or xml.dom.minidom.parseString(xml_string)
-                        dom_string = dom.toprettyxml(indent="    ", encoding="utf-8") # 4 spaces
-                        dom_string = b'\n'.join([s for s in dom_string.splitlines() if s.strip()])
+class Decode(QPlainTextEdit):
 
-                        self.clear()
-                        self.insertPlainText("CXML / XML file\n\n")
-                        self.insertPlainText("Selected ->" + fileName + "\n\n")
-                        # self.setText(e.mimeData().text()) # works for button
+    def __init__(self, title, parent):
+        super().__init__(title, parent)
 
-                        # Show output on GUI
-                        self.insertPlainText("...beautifying...\n\n")
+        self.setAcceptDrops(True)
 
-                        converted_file_name = fileName + "_beautified.cxml"
-                        with open(converted_file_name, "wb") as f:
-                            f.write(dom_string)
-                        self.insertPlainText("Created ->" + converted_file_name + "\n\n")
-                        self.insertPlainText("Please open it with a text editor")
-                        return
-
-                    if '.msg' in fileName:
-                        self.clear()
-                        self.insertPlainText(".MSG file\n\n")
-                        self.insertPlainText("Selected ->" + fileName + "\n\n")
-                        # self.setText(e.mimeData().text()) # works for button
-
-                        # Show output on GUI
-                        self.insertPlainText("...converting...\n\n")
-
-                        msg = load(fileName)
-
-                        converted_file_name = fileName + ".eml"
-
-                        with open(converted_file_name, "wb") as f:
-                            f.write(msg.as_bytes())
-                        if os.path.isfile(converted_file_name):
-                            self.insertPlainText("Created ->" + converted_file_name + "\n\n")
-                            self.insertPlainText("Opening with Mail app")
-
-                            # Open file
-                            open_mail = "open " + converted_file_name
-                            os.system(open_mail)
-
-                    # if '.msg' not in fileName or '.cxml' not in fileName or '.xml' not in fileName:
-                else:
-                        self.clear()
-                        self.insertPlainText("ERROR: Unrecognized file format\n\n")
-                        return
+    def dragEnterEvent(self, d):
+        console_encode.clear()
+        console_decode.clear()
+        # if d.mimeData().hasUrls():
+        #     d.accept()
+        if d.mimeData().hasFormat('text/plain'):
+            d.accept()
         else:
-            self.clear()
-            string_text = e.mimeData().text()
-            string_len = str(len(string_text))
-            words_len = str(len(string_text.split()))
-            self.insertPlainText("String checked: " + string_text + "\n\n")
-            self.insertPlainText("- Characters count: " + string_len + "\n\n")
-            self.insertPlainText("- Word count: " + words_len + "\n\n")
+            d.ignore()
+
+    def dropEvent(self, d):
+        text = d.mimeData().text()
+        text_decoded = ''
+        error = ''
+        if combo.currentText() == 'Base64':
+            try:
+                text_decoded = base64.b64decode(text).decode('utf-8')
+                console_decode.clear()
+                console_decode.insertPlainText(text_decoded)
+                print(f'{combo.currentText()} text_decoded {text_decoded}')
+            except Exception as error:
+                # console_decode.insertPlainText('Error: ' + str(error))
+                print(f'decoding error {str(error)}')
+                console_decode.clear()
+                console_decode.insertPlainText("Converting string FAILED! Corrupted or not supported\n\nERROR:\n" + str(error))
+
+        elif combo.currentText() == 'urlencode':
+            try:
+                text_decoded = urllib.parse.unquote_plus(text)
+                console_decode.clear()
+                console_decode.insertPlainText(text_decoded)
+                print(f'{combo.currentText()} text_decoded {text_decoded}')
+            except Exception as error:
+                print(f'decoding error {str(error)}')
+                console_decode.clear()
+                console_decode.insertPlainText("Converting string FAILED! Corrupted or not supported\n\nERROR:\n" + str(error))
 
 
 class App(QWidget):
@@ -916,54 +264,185 @@ class App(QWidget):
         self.title = 'Convert .msg to .eml'
         self.left = 10
         self.top = 10
-        self.width = 400
-        self.height = 400
+        self.width = 500
+        self.height = 800
 
         self.initUI()
 
-
     def initUI(self):
-        global console
+        """"UI definition"""
+        global console   # Available for different methods
+        global console_encode_label
+        global console_decode_label
+        global console_encode
+        global console_decode
+        global combo_label
+        global combo
+
         self.setWindowTitle(self.title)
         self.setGeometry(self.left, self.top, self.width, self.height)
 
-        version = "0.5"
-        version_text = "Version " + version
-
-        # label
         self.layout = QVBoxLayout()
-        description = QLabel("Convert .msg to .eml\nBy Selecting or Dropping a file\nThen open .eml with Mail app\n\nDrop a CXML/XML file to beautify it\n\nSelect and drop text to count words and characters")
-        # description.move(180, 20)
-        version = QLabel(version_text)
 
+        # Label
+        # description = QLabel("Convert .msg to .eml\nBeautify CXML/XML\nCount words and characters")
+        # description.resize(10,100)
+        # instructions = QLabel("Instructions\n\n")
+        # instructions.setToolTip('Convert .msg to .eml:\nUse Button or Drop a file\nIt creates an .eml and open with Mail app\n\nBeutify CXML/XML:\nDrop a .cxml or .xml file, \nIt creates a beautified file on same folder\n\nCount words and characters:\nSelect and drop text from any application')
+        # instructions.resize(10,100)
+
+        groupbox = QGroupBox("Features")
+        # groupbox.setFont(QFont("Sanserif", 15))
+        self.layout.addWidget(groupbox)
+
+        vbox = QVBoxLayout()
+
+        msg_to_eml = QLabel("Convert .msg to .eml")
+        msg_to_eml.setToolTip('Use Button or Drop a file, it creates an .eml and open with Mail app')
+        msg_to_eml.resize(10,100)
+        # msg_to_eml.setMouseTracking(True)
+
+
+        beautify_xml = QLabel("Beautify CXML/XML")
+        beautify_xml.setToolTip('Drop a .cxml or .xml file, it creates a beautified file on same folder')
+        beautify_xml.resize(10,100)
+
+        count_chars = QLabel("Count words and characters")
+        count_chars.setToolTip('Select and drop text from any application')
+        count_chars.resize(10,100)
+
+        combo_label_description = QLabel('Convert Base64 and urlencode', self)
+        combo_label_description.setToolTip('Select a conversion option and drop a string to encode or decode')
+        combo_label_description.resize(10,100)
+
+        # Button
         button = QPushButton('Select .msg', self)
         button.setToolTip('Select an .msg file')
         button.move(10,100)
-
-
-        console = TextDrop("Drop a .msg, .cxml or xml file or selected text from other apps", self)
-        # console.setDragEnabled(True)
-        console.resize(400,400)
-
         button.clicked.connect(self.openFileNameDialog)
 
-        # add sections
-        self.layout.addWidget(description)
-        self.layout.addWidget(version)
+        # Console msg, cxml, string count chars
+        console = TextDrop("Drop a .msg, .cxml or xml file or selected text from other apps", self)
+        console.resize(400,400)
+
+        vbox.addWidget(msg_to_eml)
+        vbox.addWidget(beautify_xml)
+        vbox.addWidget(count_chars)
+        vbox.addWidget(combo_label_description)
+        # vbox.addWidget(button)
+        # vbox.addWidget(console)
+        groupbox.setLayout(vbox)
+
+        # Combo
+
+
+        combo_label = QLabel('Select Conversion', self)
+        combo_label.setToolTip('Select an encoding option')
+        combo_label.resize(10,100)
+
+        combo = QComboBox(self)
+        combo.addItem("Base64")
+        combo.addItem("urlencode")
+        combo.activated[str].connect(self.onActivated)
+
+
+        groupbox_conversion = QGroupBox("Conversion")
+        # groupbox.setFont(QFont("Sanserif", 15))
+
+
+        grid = QGridLayout()
+
+        grid.addWidget(combo_label, 1, 0)
+        grid.addWidget(combo, 1, 1, 1, 3)
+
+        groupbox_conversion.setLayout(grid)
+
+        # Console urlEncode
+        console_encode_label = QLabel("Encode")
+        console_encode = Encode("Drop a string to be encoded", self)
+        console_encode.resize(400,300)
+
+        # Console urlDecode
+        console_decode_label = QLabel("Decode")
+        console_decode = Decode("Drop a encoded string to be decoded", self)
+        console_decode.resize(400,300)
+
+        # Change version with every release
+        version = "0.7"
+        version_text = "Version " + version
+        version = QLabel(version_text)
+
+
+        ### Add UI objects
+        ### GRID test
+        # grid_layout = QGridLayout()
+        # grid_layout.addWidget(msg_to_eml, 1, 0)
+        # grid_layout.addWidget(beautify_xml, 2, 0)
+        # grid_layout.addWidget(count_chars, 3, 0)
+        # grid_layout.addWidget(combo_label_description, 4, 0)
+        # grid_layout.addWidget(groupbox)
+
+        ### GROUPBOX test
+        # groupbox = QGroupBox("GroupBox Example")
+        # groupbox.setFont(QFont("Sanserif", 15))
+        # vbox = QVBoxLayout()
+        # msg_to_eml = QLabel("Convert .msg to .eml")
+        # # msg_to_eml.setToolTip('Use Button or Drop a file, it creates an .eml and open with Mail app')
+        # # msg_to_eml.resize(10,100)
+        #
+        # beautify_xml = QLabel("Beautify CXML/XML")
+        # # beautify_xml.setToolTip('Drop a .cxml or .xml file, it creates a beautified file on same folder')
+        # # beautify_xml.resize(10,100)
+        #
+        # count_chars = QLabel("Count words and characters")
+        # # count_chars.setToolTip('Select and drop text from any application')
+        # # count_chars.resize(10,100)
+        #
+        # combo_label_description = QLabel('Convert Base64 and urlencode', self)
+        # # combo_label_description.setToolTip('Select a conversion option and drop a string to encode or decode')
+        # # combo_label_description.resize(10,100)
+        # # groupbox.setLayout(grid_layout)
+        # self.setLayout(grid_layout)
+
+
+
+
+
+
+        # self.layout.addWidget(msg_to_eml)
+        # self.layout.addWidget(beautify_xml)
+        # self.layout.addWidget(count_chars)
+        # self.layout.addWidget(combo_label_description)
         self.layout.addWidget(button)
         self.layout.addWidget(console)
+
+        # self.layout.addWidget(combo_label)
+        # self.layout.addWidget(combo)
+        self.layout.addWidget(groupbox_conversion)
+
+        self.layout.addWidget(console_encode_label)
+        self.layout.addWidget(console_encode)
+        self.layout.addWidget(console_decode_label)
+        self.layout.addWidget(console_decode)
+
+        self.layout.addWidget(version)
 
         # self.setFixedSize(self.width, self.height)
         self.setFixedSize(self.size())
         self.setWindowTitle("Email Format Conversion")
         self.setLayout(self.layout)
-
-        # disabled to not open when app start, enable to open when it start
-        # self.openFileNameDialog()
-        # self.openFileNamesDialog()
-        # self.saveFileDialog()
+        # self.setLayout(grid_layout)
 
         self.show()
+
+    def mouseMoveEvent(self, event):
+        print("On Hover")
+
+    def onActivated(self, text):
+    #     combo_label
+        console_encode_label.setText("Encode")
+        console_decode_label.setText("Decode ")
+        # combo_label.adjustSize()
 
     def openFileNameDialog(self):
         console.clear()
@@ -971,49 +450,14 @@ class App(QWidget):
 
         options = QFileDialog.Options()
         options |= QFileDialog.DontUseNativeDialog
-        # fileName, _ = QFileDialog.getOpenFileName(self,"Select an .msg file", "","All Files (*);;Outlook Files (*.msg)", options=options)
+
         downloads_folder = os.getenv('HOME') + "/Downloads"
         fileName, _ = QFileDialog.getOpenFileName(self, 'Select a file', downloads_folder, "Outlook Files (*.msg)")
-        if fileName:
-            print(fileName)
-            print(os.path.realpath(__file__))
 
-            # Show output on GUI
-            console.clear()
-            console.insertPlainText("Selected ->" + fileName + "\n\n")
-            console.insertPlainText("...converting...\n\n")
+        if os.path.isfile(fileName):
 
-            msg = load(fileName)
-
-            converted_file_name = fileName + ".eml"
-
-            with open(converted_file_name, "wb") as f:
-                f.write(msg.as_bytes())
-
-            # Show output on GUI
-            console.insertPlainText("Created ->" + fileName + ".eml\n\n")
-            console.insertPlainText("Opening with Mail app")
-
-            print(f'...converted file {converted_file_name}')
-
-            # Open file
-            open_mail = "open " + converted_file_name
-            os.system(open_mail)
-
-
-    # def openFileNamesDialog(self):
-    #     options = QFileDialog.Options()
-    #     options |= QFileDialog.DontUseNativeDialog
-    #     files, _ = QFileDialog.getOpenFileNames(self,"QFileDialog.getOpenFileNames()", "","All Files (*);;Python Files (*.py)", options=options)
-        # if files:
-        #     print(files)
-
-    # def saveFileDialog(self):
-    #     options = QFileDialog.Options()
-    #     options |= QFileDialog.DontUseNativeDialog
-    #     fileName, _ = QFileDialog.getSaveFileName(self,"QFileDialog.getSaveFileName()","","All Files (*);;Text Files (*.txt)", options=options)
-        # if fileName:
-        #     print(fileName)
+            # Process file
+            process_file(fileName)
 
 
 if __name__ == '__main__':
