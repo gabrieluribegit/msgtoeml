@@ -34,16 +34,17 @@ Install requirements.txt
 
 `pip install -r requirements.txt`
 
-Replace files using files at compoundfiles folder: 
+### Replace files using files at compoundfiles folder: 
 - \__init__.py
 - reader_msg_format.py
+
 _ reader.py
 
 Replace files at this location:
 
 msgtoeml_env > lib > python3.7 > site-packages > compound-files
 
-Compile with pyinstaller:
+### Compile with pyinstaller:
 
 `pyinstaller --noconsole Convert\ msg\ to\ eml.py`
 
