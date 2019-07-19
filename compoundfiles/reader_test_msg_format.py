@@ -123,8 +123,9 @@ from .const import (
 # smaller sectors for the purposes of efficiently storing files smaller than
 # the normal sector size.
 
-class CompoundFileReader_msg_format(object):
+class CompoundFileReaderTestMsgFormat(object):
     """
+    Added to return Error messages only and avoid application aborting
     Provides an interface for reading `OLE Compound Document`_ files.
 
     The :class:`CompoundFileReader` class provides a relatively simple
@@ -168,7 +169,7 @@ class CompoundFileReader_msg_format(object):
     """
 
     def __init__(self, filename_or_obj):
-        super(CompoundFileReader_msg_format, self).__init__()
+        super(CompoundFileReaderTestMsgFormat, self).__init__()
         if isinstance(filename_or_obj, (str, bytes)):
             self._opened = True
             self._file = io.open(filename_or_obj, 'rb')

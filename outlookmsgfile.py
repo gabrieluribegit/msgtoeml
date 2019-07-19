@@ -23,11 +23,6 @@ from email.utils import parsedate_to_datetime, formatdate, formataddr
 
 import compoundfiles
 
-# from compoundfiles import reader_msg_format
-# print("---outlookmsgfile.py")
-# print(dir(reader_msg_format))
-
-
 # MAIN FUNCTIONS
 
 def load_test_format(filename_or_stream):
@@ -800,23 +795,3 @@ property_tags = {
   0x3F07: ('CONTROL_ID', 'BINARY'),
   0x3F08: ('INITIAL_DETAILS_PANE', 'I4'),
 }
-
-
-# COMMAND-LINE ENTRY POINT
-
-
-# if __name__ == "__main__":
-#   # If no command-line arguments are given, convert the .msg
-#   # file on STDIN to .eml format on STDOUT.
-#   if len(sys.argv) <= 1:
-#     print(load(sys.stdin), file=sys.stdout)
-#
-#   # Otherwise, for each file mentioned on the command-line,
-#   # convert it and save it to a file with ".eml" appended
-#   # to the name.
-#   else:
-#     for fn in sys.argv[1:]:
-#       print(fn + "...")
-#       msg = load(fn)
-#       with open(fn + ".eml", "wb") as f:
-#         f.write(msg.as_bytes())

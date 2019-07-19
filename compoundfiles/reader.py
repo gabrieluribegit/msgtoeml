@@ -233,7 +233,6 @@ class CompoundFileReader(object):
 
         # Check the header for basic correctness
         if magic != COMPOUND_MAGIC:
-            # warnings.warn(CompoundFileInvalidMagicError('Not a msg formatted file'))
             raise CompoundFileInvalidMagicError(
                     '%s does not appear to be an OLE compound '
                     'document' % filename_or_obj)
@@ -569,3 +568,4 @@ class CompoundFileReader(object):
 
     def __contains__(self, key):
         return key in self.root
+
