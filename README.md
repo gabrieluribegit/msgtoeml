@@ -34,14 +34,10 @@ Install requirements.txt
 
 `pip install -r requirements.txt`
 
-### Replace files using files at compoundfiles folder: 
-- \_\_init\_\_.py
-- reader_msg_format.py
-- reader.py
+### Replace the compoundfiles folder in your virtualenv folder for the one on this proyect: 
+Path to the folder:
 
-Replace files at your msgtoeml_env location:
-
-msgtoeml_env > lib > python3.7 > site-packages > compound-files
+msgtoeml_env > lib > python3.7 > site-packages > compoundfiles
 
 ### Compile with pyinstaller:
 
