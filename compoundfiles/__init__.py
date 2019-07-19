@@ -110,4 +110,4 @@ from compoundfiles.streams import CompoundFileStream
 from compoundfiles.entities import CompoundFileEntity
 from compoundfiles.reader import CompoundFileReader
 # ggg
-from compoundfiles.reader_msg_format import CompoundFileReader_msg_format
+from compoundfiles.reader_test_msg_format import CompoundFileReaderTestMsgFormat

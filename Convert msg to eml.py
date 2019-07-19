@@ -11,27 +11,27 @@ from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtCore import pyqtSlot
 
 # Modified from https://github.com/JoshData/convert-outlook-msg-file
-from outlookmsgfile import *
+from outlookmsgfile import load
 
-# from compoundfiles import reader_msg_format
-#
-# print(dir(reader_msg_format))
+from check_msg_format import load_test_format
 
 # Modified compoundfiles https://github.com/waveform-computing/compoundfiles
 # Modified compoundfiles on local virtualenv:
-# - Added reader_msg_format.py
-# - Replaced Raise Error to self.errors and disabled print messages
-# - TODO:
+# - Added reader_test_msg_format.py
+# - Replaced all the "Raise Error" lines, and assign error messages to self.errors
+# - Left the "Raise Error" text as commented out print lines for troubleshooting purposes
+#
 # - Changed output of this Class to return self.errors instead of instance:
 """     def __enter__(self):
         # return self
         ### ggg
-        return self.errores"""
-# - Registered new class CompoundFileReader_msg_format in __init__.py
-# from check_msg_format import *
+        return self.errores
+"""
+# - Registered new class CompoundFileReaderTestMsgFormat in __init__.py file
 
 # BUG:
-# Drag and Drop within app
+# Drag and Drop within app:
+# https://bugreports.qt.io/browse/QTBUG-72844 # on Windows, need to reopen for Mac
 # https://forum.qt.io/topic/104598/supporting-dragging-from-a-qwebengineview-to-other-qwidget-in-app
 
 
@@ -135,7 +135,9 @@ class TextDrop(QPlainTextEdit):
     def __init__(self, title, parent):
         super().__init__(title, parent)
 
+        # self.setDragEnabled(False)
         self.setAcceptDrops(True)
+        # self.setReadOnly(True)
 
     def dragEnterEvent(self, t):
         if t.mimeData().hasUrls():
@@ -222,8 +224,7 @@ class Decode(QPlainTextEdit):
     def dragEnterEvent(self, d):
         console_encode.clear()
         console_decode.clear()
-        # if d.mimeData().hasUrls():
-        #     d.accept()
+
         if d.mimeData().hasFormat('text/plain'):
             d.accept()
         else:
@@ -324,6 +325,7 @@ class App(QWidget):
         # Console msg, cxml, string count chars
         console = TextDrop("Drop a .msg, .cxml or xml file or selected text from other apps", self)
         console.resize(400,400)
+        # console.drag_enabled(False)
 
         vbox.addWidget(msg_to_eml)
         vbox.addWidget(beautify_xml)
@@ -431,6 +433,7 @@ class App(QWidget):
         self.setFixedSize(self.size())
         self.setWindowTitle("Email Format Conversion")
         self.setLayout(self.layout)
+
         # self.setLayout(grid_layout)
 
         self.show()
